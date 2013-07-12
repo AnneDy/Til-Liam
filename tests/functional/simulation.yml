@@ -1,0 +1,2034 @@
+import:
+    - imported1.yml
+    - imported2.yml
+
+globals:
+    periodic:
+        - MINR: float
+        - MIG_PERCENT: float
+
+#    MIG:
+#        type: float
+    MIG: {type: float}
+
+    othertable:
+        fields:
+            - INTFIELD: int
+            - FLOATFIELD: float
+
+    othertable_noperiod:
+        fields:
+            - INTFIELD: int
+
+entities:
+#    test:
+#        fields:
+#            - test_field: int
+
+    region:
+        links: 
+            households: {type: one2many, target: household, field: region_id}
+
+        processes:
+            # we need a dummy process so that the entity is loaded & indexed
+            dummy: True
+
+    household:
+        fields:
+            - num_persons:  {type: int, initialdata: False}
+            - nch:          {type: int, initialdata: False}
+            - start_period: {type: int, initialdata: False}
+            - clone_id:     {type: int, initialdata: False}
+            - weight:       {type: int, initialdata: False}
+            - region_id:    {type: int, initialdata: False}
+
+            # period and id are usually implicit, but we include them here
+            # anyway for the sake of testing
+            - period: int
+            - id: int
+
+        links:
+            region: {type: many2one, target: region, field: region_id}
+            persons: {type: one2many, target: person, field: hh_id}
+
+        processes:
+            init_region:
+                - region_id: choice([0, 1, 2], [0.55, 0.35, 0.10])
+
+            setweight: 
+                - weight: randint(2, 32)
+               
+            expand:
+                - last_non_clone_id: max(id)
+                - toclone: weight > 1
+                - clone_id: clone(toclone)
+                - is_clone: id > last_non_clone_id
+                - weight: if(toclone,
+                             trunc((weight + 1) / 2),
+                             if(is_clone,
+                                trunc(weight / 2),
+                                1))
+            
+            check:
+                - show('min/max weight:', min(weight), max(weight))
+                - show('total population:', sum(persons.count()),
+                       '/ expanded:', sum(weight * persons.count()))
+
+            num_persons: persons.count()
+            nch: persons.count(age <= 18)
+            maxnch: max(nch)
+            dump_csv_h: csv(dump())
+            aligned: False
+
+            test_align_link:
+                - num_persons: persons.count()
+                # kill empty households 
+                - remove(num_persons == 0)
+                
+                - total_population: sum(num_persons)
+                - show("total:", count(), "households /",
+                                 total_population, "persons")
+
+                # MIG_PERCENT is a simple float periodic global
+                - num_migrants: total_population * MIG_PERCENT
+                - qshow(num_migrants)
+
+                # MIG is a 3d table but we want the 2d table for this period
+                # currently, we need to manually compute the index
+                - base_period: 2000
+                - mig_period: MIG[:,:,period - base_period]
+
+                # Distribute total desired migrants, by age and sex
+                - need: num_migrants * mig_period
+                
+                # sanity check
+                - assertTrue(abs(need.sum() - num_migrants) < 1e-4)
+
+                # without filter
+                - aligned_all: align_abs(persons.count(), need,
+                                         link=persons, secondary_axis=gender)
+                - qshow(count(aligned_all),
+                        sum(num_persons, filter=aligned_all))
+
+                # with a filter
+                - is_candidate: uniform() < 0.5
+                - qshow(count(is_candidate),
+                        sum(num_persons, filter=is_candidate))
+
+                - aligned: align_abs(persons.count(), need,
+                                     link=persons, secondary_axis=gender,
+                                     errors='carry',
+                                     filter=is_candidate)
+                - qshow(count(aligned),
+                        sum(num_persons, filter=aligned))
+
+#                - clone_id: clone(aligned)
+
+                # with pvalues != range(0, X)
+                - bchoice: choice([False, True])
+                - weird_num: choice([5, 25, 45, 65, 85, 105])
+                - weird_need: groupby(bchoice, weird_num, expr=10)
+                - show(weird_need)
+                - show('by sex', weird_need.sum(axis=1))
+                - aligned: align_abs(persons.count(), weird_need,
+                                     link=persons, secondary_axis=0,
+                                     filter=is_candidate,
+                                     expressions=[gender, 5 + trunc(age / 20) * 20])
+                - qshow(count(aligned),
+                        sum(num_persons, filter=aligned))
+
+
+    person:
+        fields:
+            # period and id are implicit
+            - age:          int
+            - dead:         bool
+            - gender:       bool
+            - work:         bool
+
+            - partner_id:   int
+            - hh_id:        int
+            - f_id:         int
+            - m_id:         int
+
+            - weight:       {type: int, initialdata: False}
+            - eduach:       {type: int, initialdata: False}
+            - agegroup:     {type: int, initialdata: False}
+            - float_field1: {type: float, initialdata: False}
+
+        links:
+            partner: {type: many2one, target: person, field: partner_id}
+            household: {type: many2one, target: household, field: hh_id}
+            father: {type: many2one, target: person, field: f_id}
+            mother: {type: many2one, target: person, field: m_id}
+            children: {type: one2many, target: person, field: m_id}
+
+        macros:
+            ISCHILD: age < 18
+
+#            BOY: ISCHILD and MALE
+#            GIRL: ISCHILD and FEMALE
+
+            MALE: gender
+            FEMALE: not gender
+
+            CONSTANT_MACRO: 3
+
+            LOWER_SECONDARY_EDU: eduach == 2
+            UPPER_SECONDARY_EDU: eduach == 3
+            TERTIARY_EDU: eduach == 4
+
+        # possible transitions & regressions. The actual list used in the
+        # simulation must be defined below
+        processes:
+            bp: breakpoint(2002)
+
+            expand:
+                - last_non_clone_id: max(id)
+                - toclone: household.clone_id != -1
+                - clone_id: clone(toclone)
+
+                - is_clone: id > last_non_clone_id
+
+                - hh_id: if(is_clone, household.clone_id, hh_id)
+                - m_id: if(is_clone, mother.clone_id, m_id)
+                - f_id: if(is_clone, father.clone_id, f_id)
+                - partner_id: if(is_clone, partner.clone_id, partner_id)
+
+#            test_proc:
+#                code:
+#                    - toto: 10
+#
+#            test_function:
+#                args: a, b
+#                code: 
+#                    - result: a + b
+#                    - result: result * 2
+#                return: result * 2
+#
+#            test_small_function:
+#                args: a, b
+#                return: a + b
+#            
+#            test_call:
+#                - aplusb: test_function(age, 1)
+#                - show("age", age, "aplusb", aplusb)
+#                
+#            test_loop:
+#                variables: a, b
+#                sequence: age[age < 10]
+#                #sequence: zip(range(10), range(10))
+#                code:
+#                    - show("a", a, "b", b)
+#
+#            test_while:
+#                while: min(age) < 10
+#                code:
+#                    - show("age", age)
+#                    - age: age + 1
+#
+#            #XXX: embed python code instead?                    
+#            while_in_proc:
+#                - done: False
+#                # => while is a reserved keyword and can't be used as a
+#                #    variable name
+#                - while:
+#                    cond: not done
+#                    code:
+#                        - age: age + 1
+#                        - show("age", age)
+#                        - done: gtpmin(age) >= 10
+            
+#            embbeded_python:
+#                done = False
+#                while not done:
+#                    age += 1
+#                    done = min(age) >= 10
+                
+            test_init:
+                - eduach: choice([2, 3, 4], [0.40, 0.35, 0.25])
+                - weight: randint(1, 11)
+#                - new('person', number=10000000,
+#                      age=randint(102),
+#                      gender=choice([True, False], [0.5, 0.5]),
+#                      work=choice([True, False], [0.5, 0.5]),
+#                      partner_id=1)
+
+            temp_global: age + 10
+            temp_global_test1:
+                - temp_global: temp_global * 2
+            temp_global_test2:
+                - temp_global: temp_global - 10
+            show_temp_global: show(temp_global)
+
+            test_expr:
+                - show("count:", count())
+                - show("age:", age)
+                - show("age + 1:", age + 1)
+                - show("age / 10:", age / 10)
+                - show("100 / age:", 100 / age)
+                - show("age * (1 / 2):", age * (1 / 2))
+                - show("clip(age, 10, 50)", clip(age, 10, 50))
+
+                # test we are not having aliases problems
+                - backup: age
+                # modify it. This occurs in place, because the field is stored
+                # in the main array.
+                - age: age + 1
+                - assertEqual(age, backup + 1)
+                - age: backup
+
+            test_logit:
+                - float_field: age / 120.0
+                - assertNanEqual(logit(float_field),
+                                 log(float_field / (1.0 - float_field)))
+
+            test_logistic:
+                - assertEqual(logistic(age), 1.0 / (1.0 + exp(-age)))
+                - float_field: age * 1.0
+                - assertEqual(logistic(float_field),
+                              1.0 / (1.0 + exp(-float_field)))
+
+            test_attr:
+                - assertEqual(age.ndim, 1)
+
+            test_subscript:
+                # with constant argument
+                # take advantage of the fact that data is ordered by id
+                - assertEqual(id[0], min(id))
+
+                # with expr argument
+                - newborn: age[age == 0]
+                - assertEqual(newborn[0], 0)
+                
+                # with slice
+                - assertEqual(age[0:1], [age[0]])
+                
+                # with expr slice
+                - indice: trunc(count() / 2)
+                - ages: age[indice:indice+10:2]
+                - assertEqual(ages.__len__(), 5)
+                - assertEqual(ages[0], age[indice])
+
+            test_call:
+                # without argument
+                - assertEqual(age.sum(), sum(age))
+                - assertEqual(age.std(), std(age))
+                - assertEqual(age.max(), max(age))
+                - assertEqual(age.min(), min(age))
+
+                # with constant argument
+                - assertEqual(age.min(axis=-1), min(age))
+
+                # with expr argument
+                - axis: 0
+                - assertEqual(age.min(axis=axis), min(age))
+
+            test_periodic_globals:
+                # implicit global namespace
+                # -------------------------
+                - fake_wemra: if(period <= 1996, 60,
+                              if(period <= 1999, 61,
+                              if(period <= 2002, 62,
+                              if(period <= 2005, 63,
+                              if(period <= 2008, 64, 65)))))
+                - fake_wemra_pm1: if(period <= 1997, 60,
+                                  if(period <= 2000, 61,
+                                  if(period <= 2003, 62,
+                                  if(period <= 2006, 63,
+                                  if(period <= 2009, 64, 65)))))
+                # no index
+                - assertEqual(WEMRA, fake_wemra)
+                # const_index 
+                - assertEqual(MINR[2005], 13620.2)
+                # (scalar) expr index
+                - assertEqual(WEMRA[period - 1], fake_wemra_pm1)
+                
+                # Test that the generated variable name is the same for the
+                # same global when it is used multiple time (if the period
+                # is the same).
+                # This is an indirect test because I cannot test this directly
+                # yet (this should be a unit test instead).
+                # We know numexpr will explode with a ValueError("too many
+                # inputs") when there are more than 31 different variables,
+                # so if this test passes it means it worked. 
+                - assertEqual(WEMRA + WEMRA + WEMRA + WEMRA + WEMRA + WEMRA +
+                              WEMRA + WEMRA + WEMRA + WEMRA + WEMRA + WEMRA +
+                              WEMRA + WEMRA + WEMRA + WEMRA + WEMRA + WEMRA +
+                              WEMRA + WEMRA + WEMRA + WEMRA + WEMRA + WEMRA +
+                              WEMRA + WEMRA + WEMRA + WEMRA + WEMRA + WEMRA +
+                              WEMRA + WEMRA + WEMRA + WEMRA + WEMRA + WEMRA,
+                              WEMRA * 36)
+
+                - globals_in_expr: 1.0 + MINR
+                - idx_globals_in_expr: 1.0 + MINR[2002]
+                - expr_idx_globals_in_expr: 1.0 + MINR[period - 1]
+                - yob: randint(1900, period)
+                - yop: yob + 65
+                - vector_idx_globals_in_expr: 1.0 + MINR[yob + 65]
+                - show("yob", yob, "yop", yop, "v", vector_idx_globals_in_expr)
+                - yop2: yob + if(gender, 65, WEMRA)
+                - global_in_idx: show("real yop", yop2,
+                                      "minr", MINR[yob + if(gender, 65, WEMRA)])
+
+                # explicit "periodic" namespace
+                # -----------------------------
+                # no index
+                - assertEqual(periodic.WEMRA, fake_wemra)
+                # const_index 
+                - assertEqual(periodic.MINR[2005], 13620.2)
+                # expr_index
+                - assertEqual(periodic.WEMRA[period - 1], fake_wemra_pm1)
+                - vector_idx: periodic.MINR[yob + 65]
+
+            test_other_globals:
+                # with a PERIOD column 
+                - fake_intfield: if(period <= 1979, -1,
+                                 if(period <= 1996, 60,
+                                 if(period <= 1999, 61,
+                                 if(period <= 2002, 62,
+                                 if(period <= 2005, 63,
+                                 if(period <= 2008, 64, 
+                                 if(period <= 2010, 65, -1)))))))
+                - assertEqual(othertable.INTFIELD, fake_intfield)
+                # expr_index
+                - assertEqual(othertable.INTFIELD[period], fake_intfield)
+
+                - baseperiod: 1980
+                - assertEqual(othertable_noperiod.INTFIELD[0], 60)
+                # expr_index
+                - assertEqual(othertable_noperiod.INTFIELD[period - baseperiod],
+                              fake_intfield)
+                # this is equivalent to INTFIELD[2002], so it is (way) out of
+                # bounds but it does not fail, it simply returns "missing"
+                #FIXME: it should not be allowed (ie not all global variable
+                # should have this "current period if not indexed" behavior.
+                - assertEqual(othertable_noperiod.INTFIELD, -1)
+
+            test_globals_nd:
+                # MIG is a 3d array: gender-age-period
+
+                # test that MIG was loaded correctly
+                - assertEqual(MIG.ndim, 3)
+                - assertEqual(MIG.shape, (2, 121, 61))
+                - assertEqual(MIG.dim_names, ['gender', 'age', 'period'])
+
+                # need should have the same characteristics 
+                - need: MIG * 2.5
+                - assertEqual(need.ndim, 3)
+                - assertEqual(need.shape, (2, 121, 61))
+                - assertEqual(need.dim_names, ['gender','age', 'period'])
+
+                # nd_mul_nd should have the same characteristics too 
+                - nd_mul_nd: need * MIG
+                - assertEqual(nd_mul_nd.ndim, 3)
+                - assertEqual(nd_mul_nd.shape, (2, 121, 61))
+                - assertEqual(nd_mul_nd.dim_names, ['gender','age', 'period'])
+
+                # let us take the 2d table for this period
+                # currently, we need to compute the index manually
+                - base_period: 2000
+                - mig_period: MIG[:,:,period - base_period]
+                - assertEqual(mig_period.ndim, 2)
+                - assertEqual(mig_period.shape, (2, 121))
+                - assertEqual(mig_period.dim_names, ['gender', 'age'])
+                - assertEqual(mig_period.pvalues.__len__(), 2)
+
+                # should be a 2d table: gender-period
+                - need_by_sex_period: need.sum(axis=1)
+                - assertEqual(need_by_sex_period.ndim, 2)
+                - assertEqual(need_by_sex_period.shape, (2, 61))
+                # LabeledArray does not support reduction functions for now,
+                # so need_by_sex_period is not a LabeledArray
+                #- assertEqual(need_by_sex_period.dim_names, None)
+
+                # should be a 1d table: gender
+                - total_need_by_sex: need_by_sex_period.sum(axis=1)
+                - assertEqual(total_need_by_sex.ndim, 1)
+                - assertEqual(total_need_by_sex.shape, (2,))
+#fails since I changed mig.csv
+#                - assertEqual(total_need_by_sex, [7818940, 7692870])
+                
+                # for current period, a 1d table: gender
+                # currently, we need to manually compute the index
+                - need_by_sex: need_by_sex_period[:,period - base_period]
+                - assertEqual(need_by_sex.ndim, 1)
+                - assertEqual(need_by_sex.shape, (2,))
+                
+                - total_need: need_by_sex.sum()
+                - assertEqual(total_need.ndim, 0)
+                - qshow(total_need)
+
+                # vector indexes (should produce a non labeled vector)
+                # ----------------------------------------------------
+
+                # first, produce a 1 dim LabeledArray to test with
+                - need_by_sex20: MIG[:, 20, period - base_period]
+                - assertEqual(need_by_sex20.ndim, 1)
+                - assertEqual(need_by_sex20.shape, (2,))
+                - assertEqual(need_by_sex20.dim_names, ['gender'])
+
+                # 1d array[int[:]]
+                # gender can't be used directly as indices (we need integers)
+                - need_per_person: need_by_sex20[gender * 1]
+                - assertEqual(need_per_person.ndim, 1)
+                - assertEqual(need_per_person.shape, (count(),))
+                - assertEqual(need_per_person.dim_names, None)
+                - assertEqual(need_per_person.pvalues, None)
+
+                # 3d array[int[:], int[:], int]
+                - base_period: 2000
+                - percent_per_person: MIG[gender * 1, age, period - base_period]
+                - assertEqual(percent_per_person.ndim, 1)
+                - assertEqual(percent_per_person.shape, (count(),))
+                - assertEqual(percent_per_person.dim_names, None)
+                - assertEqual(percent_per_person.pvalues, None)
+                - assertEqual(percent_per_person[0],
+                              MIG[gender[0] * 1, age[0], period - base_period])
+
+                # use the resulting vector in an expression
+
+                # using the temporary variable
+                - remainder_per_person: 1 - percent_per_person
+                - assertIsClose(sum(remainder_per_person),
+                                count() - sum(percent_per_person))
+
+                # via a field: this forces a conversion to a normal
+                # (non-labeled) array
+                - float_field1: percent_per_person
+                - remainder_per_person: 1 - float_field1
+                - assertIsClose(sum(remainder_per_person),
+                                count() - sum(percent_per_person))
+
+                # direct use
+                - remainder_per_person: 1 - MIG[gender * 1, age,
+                                                period - base_period]
+                - assertIsClose(sum(remainder_per_person),
+                                count() - sum(percent_per_person))
+
+
+                # test combination with if() filter, to test whether the
+                # contextual filter works properly, especially with bad indices
+                - true_: True
+                - false_: False
+
+                # scalar key
+                # ----------
+                - alltrue: age < 1000
+                - allfalse: age > 1000
+
+                # array filter
+                - test1: if(alltrue, need_by_sex20[0], -1)
+                - assertEquiv(test1, need_by_sex20[0])
+                - test2: if(allfalse, need_by_sex20[0], -1)
+                - assertEquiv(test2, -1)
+                # bad index
+                - test3: if(allfalse, need_by_sex20[2], -1)
+                - assertEquiv(test3, -1) 
+
+                # scalar filter
+                - test1: if(true_, need_by_sex20[0], -1)
+                - assertEqual(test1, need_by_sex20[0]) 
+                - test2: if(false_, need_by_sex20[0], -1)
+                - assertEqual(test2, -1)
+                # bad index
+                - test3: if(false_, need_by_sex20[2], -1)
+                - assertEqual(test3, -1)
+
+                # array key
+                # ---------
+                # 0 and 1 are the only valid indices for need_by_sex20
+                - good_idx: if(age < 2, age, 0)
+                - bad_idx: age
+                - good_res: need_by_sex20[good_idx]
+                - target: if(age < 2, good_res, 0)
+
+                # array filter
+                - test1: if(age < 2, need_by_sex20[good_idx], 0)
+                - assertEqual(test1, target)
+                - test2: if(age >= 2, 0, need_by_sex20[good_idx])
+                - assertEqual(test2, target)
+                # bad index
+                - test3: if(age < 2, need_by_sex20[bad_idx], 0)
+                - assertEqual(test3, target)
+                - test4: if(age >= 2, 0, need_by_sex20[bad_idx])
+                - assertEqual(test4, target)
+
+                # scalar filter
+                - test1: if(true_, need_by_sex20[good_idx], -1)
+                - assertEqual(test1, good_res) 
+                - test2: if(false_, need_by_sex20[good_idx], -1)
+                - assertEquiv(test2, -1)
+                # bad index
+                - test3: if(false_, need_by_sex20[bad_idx], -1)
+                - assertEquiv(test3, -1) 
+
+                # tuple key
+                # ---------
+                - gender_idx: gender * 1
+                - period_idx: period - base_period
+                - good_idx: gender_idx, if(age < 70, age + 20, -1), period_idx
+                - bad_idx1: gender_idx, age + 20, period_idx
+                - bad_idx2: gender_idx, age, period_idx + 100
+                - good_res: MIG[good_idx]
+                - target: if(age < 70, good_res, -1)
+
+                # array filter
+                - test1: if(age < 70, MIG[good_idx], -1)
+                - assertEqual(test1, target)
+                - test2: if(allfalse, MIG[good_idx], -1)
+                - assertEquiv(test2, -1)
+                # bad index
+                - test3: if(allfalse, MIG[bad_idx1], -1)
+                - assertEquiv(test3, -1) 
+                - test4: if(allfalse, MIG[bad_idx2], -1)
+                - assertEquiv(test4, -1) 
+
+                # scalar filter
+                - test1: if(true_, MIG[good_idx], -1)
+                - assertEqual(test1, good_res)
+                - test2: if(false_, MIG[good_idx], -1)
+                - assertEquiv(test2, -1)
+                # bad index
+                - test3: if(false_, MIG[bad_idx1], -1)
+                - assertEquiv(test3, -1) 
+                - test4: if(false_, MIG[bad_idx2], -1)
+                - assertEquiv(test4, -1) 
+
+            test_macro:
+                - ischild: age < 18
+                - test_nonmacro1: show(sum(ischild))
+                - test_macro1: show(sum(ISCHILD))
+#                - breakpoint(2002)
+
+                - age: age + 1
+
+                - test_nonmacro2: show(sum(ischild))
+                - show("test sum:", sum(ischild))
+                - test_macro2: show(sum(ISCHILD))
+
+                - show('male students', count(MALE and LOWER_SECONDARY_EDU))
+
+#                - show('expr wh missing parenthesis', count(age < 15 & eduach == 2))
+                # equivalent to count(age < (15 & eduach) == 2)
+                # equivalent to count((age < (15 & eduach)) *and* ((15 & eduach) == 2))
+                # calls __nonzero__ on the first part (age < (15 & eduach))
+                - show(groupby(eduach, gender))
+
+            agegroup: if(age < 50, 5 * trunc(age / 5), 10 * trunc(age / 10))
+
+            test_align:
+                - num_all: count()
+                - num_women: count(not gender)
+                - num_men: count(gender)
+
+                # manual alignment on an integer column
+                # -------------------------------------
+                - int_aligned: align(age,
+                                     expressions=[gender],
+                                     possible_values=[[False, True]],
+                                     proportions=[0.1, 0.2])
+                - num_aligned: count(int_aligned)
+                - num_aligned_women: count(int_aligned and not gender)
+                - num_aligned_men: count(int_aligned and gender)
+                - assertTrue(num_aligned_women - 0.1 * num_women < 1.0)
+                - assertTrue(num_aligned_men - 0.2 * num_men < 1.0)
+                - assertEqual(num_aligned_women + num_aligned_men, num_aligned)
+
+                # check that older individuals are taken first
+                - assertTrue(max(age, filter=gender and not int_aligned)
+                             <=
+                             min(age, filter=gender and int_aligned))
+                - assertTrue(max(age, filter=not gender and not int_aligned)
+                             <=
+                             min(age, filter=not gender and int_aligned))
+
+                # manual alignment on a float column (with nan)
+                # ---------------------------------------------
+                - nan_age: if(age < 10, nan, age * 1.0)
+                - assertEqual(count(nan_age != nan_age), count(age < 10))
+                - float_aligned: align(nan_age,
+                                       expressions=[gender],
+                                       possible_values=[[False, True]],
+                                       proportions=[0.1, 0.2])
+                - num_aligned: count(float_aligned)
+                - num_aligned_women: count(float_aligned and not gender)
+                - num_aligned_men: count(float_aligned and gender)
+
+                - assertTrue(num_aligned_women - 0.1 * num_women < 1.0)
+                - assertTrue(num_aligned_men - 0.2 * num_men < 1.0)
+                - assertEqual(num_aligned_women + num_aligned_men, num_aligned)
+
+                # check that nan are chosen first
+                # we have two different scenarii:
+                # 1) we have more "nan" than we need
+                #    => we check that all taken are "nan"
+                # 2) or we have less "nan" than we need
+                #    => we check that all "nan" are taken / aligned
+                # and we have to check separately for men and women
+
+                - isnan: nan_age != nan_age
+
+                # women
+
+                # more than 10% women are "nan"
+                - morenan: count(not gender and isnan) > num_women * 0.1
+                # we use min as a lesser all()
+                - all_taken_nan: min(isnan,
+                                        filter=not gender and float_aligned)
+                - all_nan_taken: min(float_aligned,
+                                        filter=not gender and isnan)
+                - assertTrue(if(morenan, all_taken_nan, all_nan_taken))
+
+                # men
+
+                # more than 20% men are "nan"
+                - morenan: count(gender and isnan) > num_men * 0.2
+                - all_taken_nan: min(isnan, filter=gender and float_aligned)
+                - all_nan_taken: min(float_aligned, filter=gender and isnan)
+
+                - assertTrue(if(morenan, all_taken_nan, all_nan_taken))
+
+                # manual alignment with a constant
+                # --------------------------------
+                - const_aligned: align(False, filter=age < 10,
+                                       expressions=[gender],
+                                       possible_values=[[False, True]],
+                                       proportions=[0.1, 0.2])
+                - num_aligned: count(const_aligned)
+                - num_aligned_women: count(const_aligned and not gender)
+                - num_aligned_men: count(const_aligned and gender)
+
+                - assertTrue(num_aligned_women - 0.1 * num_women < 1.0)
+                - assertTrue(num_aligned_men - 0.2 * num_men < 1.0)
+                - assertEqual(num_aligned_women + num_aligned_men, num_aligned)
+
+                # check that individuals with higher ids are chosen first
+                - assertTrue(max(id, filter=gender and (age < 10) and
+                                               not const_aligned)
+                             <=
+                             min(id, filter=gender and const_aligned))
+                - assertTrue(max(id, filter=not gender and (age < 10) and
+                                               not const_aligned)
+                             <=
+                             min(id, filter=not gender and const_aligned))
+
+                # manual alignment with no score
+                # ------------------------------
+                - none_aligned: align(filter=age < 10,
+                                      expressions=[gender],
+                                      possible_values=[[False, True]],
+                                      proportions=[0.1, 0.2])
+                - num_aligned: count(none_aligned)
+                - num_aligned_women: count(none_aligned and not gender)
+                - num_aligned_men: count(none_aligned and gender)
+
+                - assertTrue(num_aligned_women - 0.1 * num_women < 1.0)
+                - assertTrue(num_aligned_men - 0.2 * num_men < 1.0)
+                - assertEqual(num_aligned_women + num_aligned_men, num_aligned)
+
+                # check that individuals with higher ids are chosen first
+                - assertTrue(max(id, filter=gender and (age < 10) and
+                                               not none_aligned)
+                             <=
+                             min(id, filter=gender and none_aligned))
+                - assertTrue(max(id, filter=not gender and (age < 10) and
+                                               not none_aligned)
+                             <=
+                             min(id, filter=not gender and none_aligned))
+
+                # manual alignment with individuals in missing categories
+                # -------------------------------------------------------
+
+                - miss_aligned: align(filter=id < 100,
+                                      expressions=[20 * trunc(age / 20)],
+                                      possible_values=[[0, 20, 60, 80, 100]],
+                                      proportions=[0.1, 0.1, 0.1, 0.1, 0.1])
+                - num_aligned: count(miss_aligned)
+                - assertTrue(num_aligned - 0.1 * num_all < 1.0)
+
+                # alignment with an implicit filter
+                # ---------------------------------
+
+                # the "dead" variable is also used for the cleanup process
+                - dead: if(gender,
+                           align(take=age > 95, leave=ISCHILD,
+                                 fname='al_p_dead_m.csv'),
+                           align(take=age > 95, leave=ISCHILD,
+                                 fname='al_p_dead_f.csv'))
+
+                - assertEqual(count(not dead and (age > 95)), 0)
+                - assertEqual(count(dead and ISCHILD), 0)
+
+                # 3d alignment (gender, age, period)
+                # ----------------------------------
+                - dead2: align(take=age > 95, leave=ISCHILD,
+                               fname='al_p_dead.csv')
+
+                - assertTrue(count(dead != dead2) <= 105)
+                
+                # 2d alignment with period not last
+                # ---------------------------------
+                - percent_f: if(period <= 2002, 0.2,
+                             if(period <= 2003, 0.3, 0.4))
+                - percent_m: percent_f + 0.1
+                - aligned: align(fname='al_p_period_notlast.csv')
+
+                - theoric_aligned_f: trunc(count(not gender) * percent_f)
+                - theoric_aligned_m: trunc(count(gender) * percent_m)
+                - diff_f: count(aligned and not gender) - theoric_aligned_f  
+                - diff_m: count(aligned and gender) - theoric_aligned_m  
+                - assertTrue((0 <= diff_f) and (diff_f <= 1))
+                - assertTrue((0 <= diff_m) and (diff_m <= 1))
+                - show('diff_f', diff_f, 'diff_m', diff_m)
+
+                # 1d alignment (period)
+                # ---------------------
+                - period_only: align(fname='al_p_period_only.csv')
+                - num_aligned: count(period_only)
+                - target_percent: if(period == 2002, 0.2,
+                                  if(period == 2003, 0.3,
+                                  0.4))
+                - assertTrue(num_aligned - target_percent * num_all < 1.0)
+
+                # 1d alignment (other than period)
+                # --------------------------------
+                - by_gender: align(fname='al_p_one_dim.csv')
+
+                - num_aligned: count(by_gender)
+                - num_aligned_women: count(by_gender and not gender)
+                - num_aligned_men: count(by_gender and gender)
+
+                - assertTrue(num_aligned_women - 0.2 * num_women < 1.0)
+                - assertTrue(num_aligned_men - 0.3 * num_men < 1.0)
+                - assertEqual(num_aligned_women + num_aligned_men, num_aligned)
+
+                # align using a temporary variable
+                - temp: age + 1
+
+                # these do not produce exactly the same values because of the
+                # way we correct for "fractional persons" with a probability of
+                # adding one person. However the difference should be <= than
+                # the number of alignment categories.
+                - var_aligned: align(fname='al_p_dead_m.csv')
+                - temp_aligned: align(fname='al_p_temp.csv')
+                - expr_aligned: align(fname='al_p_dead_m.csv',
+                                      expressions=[age + 1 - (age + 1) / (age + 1), period])
+                - assertTrue(count(temp_aligned != var_aligned) <= 105)
+                - assertTrue(count(expr_aligned != var_aligned) <= 105)
+
+                # fixed proportion
+                # ----------------
+                - fixed_percent_aligned: align(proportions=0.1)
+                - num_aligned: count(fixed_percent_aligned)
+                - assertTrue(abs(num_aligned - trunc(num_all * 0.1)) <= 1)
+                
+                # expr proportion
+                # ---------------
+                - percent: if(period == 2002, 0.1, 0.2) 
+                - expr_percent_aligned: align(proportions=percent)
+                - num_aligned: count(expr_percent_aligned)
+                - target_num: if(period == 2002, 
+                                 trunc(0.1 * num_all),
+                                 trunc(0.2 * num_all))
+                - assertTrue(abs(num_aligned - target_num) <= 1)
+                
+                # method sidewalk
+                # ---------------
+                - proba_age: logistic((age-50)/10)              
+                - align_sort: align_abs(proba_age, 100)
+                - align_sidewalk: align_abs(proba_age, 100, method = "sidewalk")
+                - align_sidewalk_sum: align_abs(proba_age, method = "sidewalk")
+                - align_sidewalk_sum_filter : align_abs(proba_age, filter = gender, method = "sidewalk")
+                - assertTrue( count(align_sidewalk) == 100)
+                - assertTrue(  sum(proba_age) - count(align_sidewalk_sum) < 1 )
+                - assertTrue(  sum(proba_age, filter = gender) - count(align_sidewalk_sum_filter) < 1 )
+                # because proba_age increases with age we have: 
+                - assertTrue( min(age,filter = align_sidewalk) <= min(age,filter = align_sort))
+                
+                
+                
+                
+                # Note that 
+                - num_aligned: count(expr_percent_aligned)
+                - target_num: if(period == 2002, 
+                                 trunc(0.1 * num_all),
+                                 trunc(0.2 * num_all))
+                - assertTrue(abs(num_aligned - target_num) <= 1)
+                
+                
+
+                # expr ndarray
+                # ------------
+
+                # compute % of men for each age
+                # Note that we cannot use groupby(age, filter=gender) because
+                # in that case we might have age categories missing whereas
+                # we want them to be empty instead.  
+                - men_by_age: groupby(age, expr=count(gender))
+                - men_prop_by_age: men_by_age / groupby(age)
+
+                - expr_ndarray_aligned: align(proportions=men_prop_by_age)
+                - num_aligned: count(expr_ndarray_aligned)
+                # this is correct (and not modulo 1 for each category like
+                # other alignment tests) because for each age:
+                # expected = len(member_indices) * proportion
+                # where len(member_indices) = count(age==x) 
+                #                             count(age==x and gender)
+                #   and proportion          = ---------------------------
+                #                             count(age==x)
+                #            count(age==x) * count(age==x and gender)
+                # expected = ------------------------------------------------
+                #            count(age==x)
+                #          = count(age==x and gender)
+                # and thus expected == int(expected)
+                - assertEqual(num_aligned, count(gender))
+                - assertEqual(groupby(age, filter=expr_ndarray_aligned),
+                              groupby(age, filter=gender))
+
+            test_align_abs:
+                - num_all: count()
+                - num_women: count(not gender)
+                - num_men: count(gender)
+
+                # manual alignment on an integer column
+                # -------------------------------------
+                - int_aligned: align_abs(age, 
+                                         [10, 20],
+                                         expressions=[gender],
+                                         possible_values=[[False, True]])
+                - assertEqual(count(int_aligned and not gender), 10)
+                - assertEqual(count(int_aligned and gender), 20)
+                - assertEqual(count(int_aligned), 30)
+
+                # check that older individuals are taken first
+                - assertTrue(max(age, filter=gender and not int_aligned)
+                             <=
+                             min(age, filter=gender and int_aligned))
+                - assertTrue(max(age, filter=not gender and not int_aligned)
+                             <=
+                             min(age, filter=not gender and int_aligned))
+
+                # external file
+                # -------------
+                - by_gender: align_abs(0, 'al_p_absolute.csv')
+
+                - assertEqual(count(by_gender), 50)
+                - assertEqual(count(by_gender and not gender), 20)
+                - assertEqual(count(by_gender and gender), 30)
+
+                # external file, overridden expressions
+                # -------------------------------------
+                - by_gender: align_abs(0, 'al_p_absolute.csv',
+                                       expressions=[not gender])
+
+                - assertEqual(count(by_gender), 50)
+                - assertEqual(count(by_gender and not gender), 30)
+                - assertEqual(count(by_gender and gender), 20)
+
+                # external file, overridden possible_values
+                # -----------------------------------------
+                - by_gender: align_abs(0, 'al_p_absolute.csv',
+                                       possible_values=[[True, False]])
+
+                - assertEqual(count(by_gender), 50)
+                - assertEqual(count(by_gender and not gender), 30)
+                - assertEqual(count(by_gender and gender), 20)
+
+            test_logit_regr:
+                # equivalent to uniform() > 0.5
+                - simple: logit_regr(0.0)
+                - fixed_percent: logit_regr(0.0, align=0.5)
+                - with_file: logit_regr(0.0, align='al_p_one_dim.csv')
+
+            test_cont_regr:
+                # expr only
+                - assertEqual(cont_regr(2.4 + 0.22 * age),
+                              2.4 + 0.22 * age)
+
+                # with explicit filter
+                - value: cont_regr(2.4 + 0.22 * age, filter=gender)
+                # we can't use assertEqual(value, xxx) because arrays with nans
+                # do not compare equal
+                - check: if(gender,
+                            value == 2.4 + 0.22 * age,
+                            value != value)
+                - assertEqual(count(check), count())
+                
+                # with implicit filter
+                - assertEqual(if(gender, cont_regr(2.4 + 0.22 * age), 42.0),
+                              if(gender, 2.4 + 0.22 * age, 42.0))
+
+                # with both implicit and explicit filter
+                - value: if(gender,
+                            cont_regr(2.4 + 0.22 * age, filter=age > 20),
+                            42.0)
+                - check: if(gender,
+                            if(age > 20,
+                               value == 2.4 + 0.22 * age,
+                               value != value),
+                            value == 42.0)
+                - assertEqual(count(check), count())
+
+                # with error_var
+                - err: normal()
+                - assertEqual(cont_regr(2.4 + 0.22 * age, error_var='err'),
+                              2.4 + 0.22 * age + err)
+
+                # with mult
+                - value: cont_regr(2.4 + 0.22 * age, mult=2)
+                # this should yield a simple normal random distribution
+                - check: (value - (2.4 + 0.22 * age)) / 2
+
+                # the average of a normal is mu (=0)
+                - mu: 0
+                - assertTrue(abs(mu - avg(check)) < 0.1)
+                # the stddev of a normal is sigma (=1)
+                - sigma: 1
+                - assertTrue(abs(sigma - std(check)) < 0.1)
+
+            test_log_regr:
+                # expr only
+                - assertEqual(log_regr(2.4 + 0.22 * age),
+                              exp(2.4 + 0.22 * age))
+
+                # with explicit filter
+                - value: log_regr(2.4 + 0.22 * age, filter=gender)
+                # we can't use assertEqual(value, xxx) because arrays with nans
+                # do not compare equal
+                - check: if(gender,
+                            value == exp(2.4 + 0.22 * age),
+                            value != value)
+                - assertEqual(count(check), count())
+                
+                # with implicit filter
+                - assertEqual(if(gender, log_regr(2.4 + 0.22 * age), 42),
+                              if(gender, exp(2.4 + 0.22 * age), 42))
+
+                # with both implicit and explicit filter
+                - value: if(gender,
+                            log_regr(2.4 + 0.22 * age, filter=age > 20),
+                            42.0)
+                - check: if(gender,
+                            if(age > 20,
+                               value == exp(2.4 + 0.22 * age),
+                               value != value),
+                            value == 42.0)
+                - assertEqual(count(check), count())
+
+                # with error_var
+                - err: normal()
+                - assertEqual(log_regr(2.4 + 0.22 * age, error_var='err'),
+                              exp(2.4 + 0.22 * age + err))
+
+                # with mult
+                - value: log_regr(2.4 + 0.22 * age, mult=2)
+                # this should yield a simple normal random distribution
+                - check: (log(value) - (2.4 + 0.22 * age)) / 2
+
+                # the average of a normal is mu (=0)
+                - mu: 0
+                - assertTrue(abs(mu - avg(check)) < 0.1)
+                # the stddev of a normal is sigma (=1)
+                - sigma: 1
+                - assertTrue(abs(sigma - std(check)) < 0.1)
+
+            test_uninitialized_var: uninitialized_var
+            uninitialized_var: True
+
+            test_new:
+                # with no filter/parent (number=) 
+                - new_id: new('person', number=10,
+                              age=0,
+                              gender=choice([True, False], [0.51, 0.49]))
+
+                # with explicit filter
+                - givebirth: not gender and (age >= 16) and (age <= 50)
+                - new_id: new('person', filter=givebirth and partner_id != -1,
+                              age=0,
+                              partner_id=-1,
+                              hh_id=hh_id,
+                              m_id=id,
+                              f_id=partner.id,
+                              gender=choice([True, False], [0.51, 0.49]))
+
+                # with implicit filter
+                                    # unknown father (even if the mother has a 
+                                    # a partner)
+                - new_id: if(givebirth,
+                             if(age < 25,
+                                new('person',
+                                    age=0,
+                                    partner_id=-1,
+                                    hh_id=hh_id,
+                                    m_id=id,
+                                    f_id=-1,
+                                    gender=choice([True, False], [0.51, 0.49])),
+                                new('person',
+                                    age=0,
+                                    partner_id=-1,
+                                    hh_id=hh_id,
+                                    m_id=id,
+                                    f_id=partner.id,
+                                    gender=logit_regr(0.0))),
+                             -1)
+
+            test_o2m:
+                # new style (link methods)
+                
+                # count
+                - nch: children.count()
+                #- assertEqual(m_id, mother.id)
+                - assertEqual(sum(nch), count(mother.id != -1))
+
+                - nch_012: children.count(age <= 12)
+                - assertTrue(all(nch_012 <= nch))
+                
+                # sum
+                - ch_012_age_sum: children.sum(age, age <= 12)
+                - ch_012_age2_sum: children.sum(age * 2, age <= 12)
+                - assertEqual(ch_012_age2_sum, ch_012_age_sum * 2)
+
+                # with a scalar
+                - assertEqual(children.sum(10), nch * 10)
+
+                # avg
+                - ch_012_age_avg: children.avg(age, age <= 12)
+                - assertNanEqual(ch_012_age_avg, ch_012_age_sum / nch_012)  
+                
+                # min, max
+                - ch_minage: children.min(age)
+                - ch_maxage: children.max(age)
+                - assertTrue(all(ch_minage <= ch_maxage))
+                - assertTrue(sum(ch_minage) < sum(ch_maxage))
+
+                # old style (link functions)
+                # countlink
+                - nch: children.count()
+                - assertEqual(sum(nch), count(mother.id != -1))
+
+                - nch_012: children.count(age <= 12)
+                - assertTrue(all(nch_012 <= nch))
+                
+                # sumlink
+                - ch_012_age_sum: children.sum(age, age <= 12)
+                - ch_012_age2_sum: children.sum(age * 2, age <= 12)
+                - assertEqual(ch_012_age2_sum, ch_012_age_sum * 2)
+
+                # with a scalar
+                - assertEqual(children.sum(10), nch * 10)
+
+                # avglink
+                - ch_012_age_avg: children.avg(age, age <= 12)
+                - assertNanEqual(ch_012_age_avg, ch_012_age_sum / nch_012)
+                  
+                # minlink, maxlink
+                - ch_minage: children.min(age)
+                - ch_maxage: children.max(age)
+                - assertTrue(all(ch_minage <= ch_maxage))
+                - assertTrue(sum(ch_minage) < sum(ch_maxage))
+
+            test_mixed_links:
+                - show('mother vs step-mother:', mother.age, partner.mother.age)
+                - show('other sex step-parent:',
+                       if(gender, partner.mother.age, partner.father.age))
+                - show('age vs age if married:', age, partner.partner.age)
+                - show('mother.partner.age:', mother.partner.age,
+                       'father.age:', father.age)
+                - show('hh.id:', household.id,
+                       'hh.id+1:', household.get(id + 1),
+                       'edu:', eduach,
+                       'num persons:', household.get(persons.count()),
+                       'num high edu:', household.get(persons.count(eduach == 4)))
+                - show('region',
+                       household.region_id,
+                       'num hh in region',
+                       household.region.get(households.count()))
+                - show(avg(children.count()))
+
+#            test_extra_comma:
+#                - show('test extra colon'),
+
+            test_predictor1:
+                predictor: plop
+                expr: if(age < 10, age ** 3, age ** 2)
+            test_predictor2:
+                predictor: plop
+                expr: if(age >= 10, 100, plop)
+
+            test_predictor3:
+                - a:
+                    predictor: plop2
+                    expr: if(age < 10, age ** 3, age ** 2)
+                - b:
+                    predictor: plop2
+                    expr: if(age >= 50, 100, plop2)
+                - show(plop2)
+
+            test_clone:
+                - clone(filter = age == 95,
+                        f_id = id,
+                        m_id = id)
+
+            marriage:
+                - married: partner_id != -1
+
+                - to_marry: (age >= 18) and (age <= 90) and not married
+                - avg_age_men: avg(age, filter=to_marry and gender)
+                - difficult_match: if(to_marry and not gender,
+                                      abs(age - avg_age_men),
+                                      nan)
+                - workless: not work
+                - partner_id:
+                    if(to_marry,
+                       matching(set1filter=not gender,
+                                set2filter=gender,
+                                score=- 0.4893 * other.age
+                                      + 0.0131 * other.age ** 2
+                                      - 0.0001 * other.age ** 3
+                                      + 0.0467 * (other.age - age)
+                                      - 0.0189 * (other.age - age) ** 2
+                                      + 0.0003 * (other.age - age) ** 3
+                                      - 0.9087 * (other.work and workless)
+                                      - 1.3286 * (other.workless and not workless)
+                                      - 0.6549 * (other.work and work)
+                                      - 0.7939 * ((other.eduach == 3) and TERTIARY_EDU)
+                                      - 1.4128 * ((other.eduach == 2) and TERTIARY_EDU)
+                                      - 0.8984 * ((other.eduach == 4) and UPPER_SECONDARY_EDU)
+                                      - 1.5530 * ((other.eduach == 4) and LOWER_SECONDARY_EDU)
+                                      - 0.5451 * ((other.eduach == 2) and LOWER_SECONDARY_EDU)
+                                      + 0.0015 * abs(household.num_persons - other.household.num_persons),
+                                orderby=difficult_match),
+                       partner_id)
+
+                - just_married: to_marry and (partner_id != -1)
+
+                - newhousehold: new('household', filter=just_married and not gender,
+                                    start_period=period)
+                - hh_id: if(just_married,
+                            if(gender, partner.newhousehold, newhousehold),
+                            hh_id)
+
+            test_compound:
+                - show(min(age, 10))
+                - show(max(min(age, 10)))
+
+                - assertEqual(max(min(age, 10)), 10)
+                - assertEqual(min(max(age, 20)), 20)
+
+            test_lag:
+                - global: show(MINR)
+                - global_t: show(MINR[period])
+                
+                - lagglobal: show(lag(MINR))
+                - lagglobal_period: show(lag(MINR[period]))
+                - lagglobal_attr: show(lag(MINR.shape))
+                - global_t_1: show(MINR[period - 1])
+                
+                - global_t_age: show(MINR[period - age])
+                - lagglobal_expr: show(lag(MINR, min(age) + 1))
+
+                # does not work yet. It needs the context to accept a vector
+                # of periods instead of a single period
+#                - lagglobal_expr_multi: show(lag(MINR, age))
+
+                - lag_age_subscript: show(lag(age[0]))
+
+                - lagavg: show(lag(avg(age)))
+                - avglag: show(avg(lag(age)))
+
+                # this fails if we cloned adults: they are missing in last
+                # period but have an age != 0 this period
+#                - assertEqual(lag(age, missing=0), if(age == 0, 0, age - 1))
+
+                - num_birth: count(age == 0)
+                # fails with clones
+#                - assertEqual(count(lag(age) == -1), num_birth)
+                - assertEqual(count(lag(age, missing=0) == -1), 0)
+
+                - num1yearold: count(age == 1)
+#                - assertEqual(count(lag(age, missing=0) == 0),
+#                              num1yearold + num_birth)
+
+                - assertEqual(lag(age, 2), lag(lag(age)))
+
+                # for clones lag(age, 2) is -1, even if the parent of the clone
+                # is alive in period - 2
+                - cloned: (m_id == f_id) and (m_id != -1)
+#                - assertEqual(if(cloned,
+#                                 age - 2,
+#                                 lag(age, 2)),
+#                              if(period > 2002,
+#                                 if(age >= 2, age - 2, -1),
+#                                 -1))
+
+            test_value_for_period:
+                # period is a constant
+                - assertEqual(value_for_period(MINR, 2005), 13620.2)
+                - assertEqual(value_for_period(age, 2001)[0], 24)
+
+                # period is a scalar expression
+                - assertEqual(value_for_period(age, period - 1), lag(age))
+
+            test_duration:
+                - show("age > 10", duration(age > 10))
+                - show("max(d, 2)", max(duration(age > 10), 2))
+
+                # with a simple boolean variable
+                # modify work so that it is not constant for all periods
+                - work: choice([False, True])
+                # this is just a way to save the work variable
+                - work_backup: work and work
+                - dur_work: duration(work)
+                # check that work was not modified (used to be the case)
+                - assertEqual(work, work_backup)
+                # check that dur_work is correct
+                - assertEqual(dur_work == 0, not work)
+                - assertEqual(dur_work == 1, work and not lag(work))
+                - assertEqual(dur_work == 2,
+                              work and lag(work) and not lag(work, 2))
+                - assertEqual(dur_work > 2,
+                              work and lag(work) and lag(work, 2))
+
+            test_dump_init:
+                - empty_file: csv(fname='empty_file.csv')
+                - one_line_header: csv('period', 'id', 'age', fname='person_ages.csv')
+                - two_line_header: csv(['average', 'gini'],
+                                       ['-', 'inequality coefficient'],
+                                       fname='person_age_aggregates.csv')
+
+            test_dump:
+                - expr: csv(dump(gender, age, partner_id, partner.age),
+                            suffix='partner_ages')
+                - full: csv(dump(), suffix='full')
+                - twodumps: csv(dump(gender, age, filter=not gender),
+                                'and now something completely different',
+                                dump(gender, age, filter=gender),
+                                suffix='split_ages')
+                # no fname nor suffix
+                - csv(dump(age))
+                - fname: csv(dump(age), fname='person_ages_{period}.csv')
+                # append
+                - csv(dump(period, id, age, filter=id < 10, header=False),
+                      fname='person_ages.csv', mode='a')
+                # test show
+                - show(dump(gender, age, filter=id < 10))
+                # aggregate and filter (0.6 * is important, otherwise we don't
+                # get a 0-d ndarray back, which was the cause of a bug)
+                - median_age: 0.6 * median(age)
+                - csv(dump(age, avg(age), age > avg(age), median_age,
+                           filter=id < 10),
+                      suffix='aggregate_filter')
+
+            test_csv:
+                - expr: csv(avg(age),
+                            fname='person_age_aggregates.csv', mode='a')
+                - exprs: csv(avg(age), gini(age),
+                             fname='person_age_aggregates.csv', mode='a')
+
+                # empty groupby
+                - csv(groupby(gender, filter=age > 200))
+
+            cleanup: remove(lag(dead))
+
+            test_count:
+                # simple
+                - population: count()
+                # not very useful but I could not think of something better
+                - assertTrue(population >= 0)
+                
+                # with a filter
+                - qshow(count(MALE))
+                - qshow(count(FEMALE))
+                - assertEqual(count(MALE) + count(FEMALE), population)
+                - assertEqual(count(MALE) + count(FEMALE), population)
+
+                # Old syntax
+                # ----------
+
+                - assertEqual(grpcount(), population)
+                - assertEqual(grpcount(MALE) + grpcount(FEMALE), population)
+
+            test_sum:
+                # simple
+                - population_age: sum(age)
+                # explicit filter
+                - males_age: sum(age, filter=MALE)
+                - assertEqual(males_age, sum(age * MALE))
+                - females_age: sum(age, filter=FEMALE)
+                - qshow(FEMALE)
+                - qshow(sum(FEMALE))
+                - qshow(age * FEMALE)
+                - qshow(sum(age * FEMALE))
+                - assertEqual(females_age, sum(age * FEMALE))
+                - assertEqual(males_age + females_age, population_age)
+                
+                # implicit/contextual filter
+                # assign to each man the sum of men ages and to each woman
+                # the sum of women ages
+                - filtered: if(MALE, sum(age), sum(age))
+                - assertEqual(count(filtered == males_age),
+                              count(MALE))
+                - assertEqual(count(filtered == females_age),
+                              count(FEMALE))
+
+                # nested contextual filter (this is more of a test of nested
+                # contextual filters than sum but it makes more sense to
+                # have it here anyway)
+                - teen: age >= 10 and age < 20
+                - test: if(MALE,
+                           if(teen, sum(age), sum(age)),
+                           sum(age))
+                - male_teens_age: sum(age, MALE and teen)
+                - male_other_age: sum(age, MALE and not teen)
+                - assertEqual(count(test == male_teens_age),
+                              count(MALE and teen))
+                - assertEqual(count(test == male_other_age),
+                              count(MALE and not teen))
+                - assertEqual(count(test == females_age),
+                              count(FEMALE))
+                              
+                # with missing
+                - assertEqual(sum([1, -1, 2]), 3)
+                - assertEqual(sum([1.0, nan, 2.0]), 3.0)
+                
+                # with missing but skip_na=False
+                - assertEqual(sum([1, -1, 2], skip_na=False), 2)
+                - withnan: sum([1.0, nan, 2.0], skip_na=False)
+                - assertTrue(withnan != withnan)
+
+                # with missing and filter
+                - assertEqual(sum(if(age > 10, -1, age), filter=gender),
+                              sum(age, filter=age <= 10 and gender))
+                - f_age: age * 1.0
+                - assertEqual(sum(if(age > 10, nan, f_age), filter=gender),
+                              sum(f_age, filter=age <= 10 and gender))
+
+                # bool expr
+                - sum_bool: sum([False, True, True])
+                - assertEqual(sum_bool, 2)
+                
+                # scalar
+                # currently fails
+#                - assertEqual(sum(2), 2 * count())
+                - assertEqual(sum(2, filter=MALE), 2 * count(MALE))
+
+                # Old syntax
+                # ----------
+
+                - population_age: grpsum(age)
+                - males_age: grpsum(age, filter=MALE)
+                - assertEqual(males_age, sum(age * MALE))
+                - females_age: grpsum(age, filter=FEMALE)
+                - assertEqual(females_age, sum(age * FEMALE))
+                - assertEqual(males_age + females_age, population_age)
+                - filtered: if(MALE, grpsum(age), grpsum(age))
+                - assertEqual(count(filtered == males_age), count(MALE))
+                - assertEqual(count(filtered == females_age), count(FEMALE))
+                - assertEqual(grpsum([1, -1, 2], skip_na=False), 2)
+
+            test_avg:
+                # simple
+                - assertEqual(avg(age), sum(age) / count())
+
+                # explicit filter
+                - assertEqual(avg(age, filter=MALE),
+                              sum(age, filter=MALE) / count(MALE))
+                - assertEqual(avg(age, filter=FEMALE),
+                              sum(age, filter=FEMALE) / count(FEMALE))
+
+                # with missing
+                - assertEqual(avg([1.0, nan, 3.0]), 2.0)
+                - assertEqual(avg([1, -1, 3]), 2.0)
+                
+                # with missing but skip_na=False
+                - assertEqual(avg([1, -1, 3], skip_na=False), 1.0)
+                - withnan: avg([1.0, nan, 3.0], skip_na=False)
+                - assertTrue(withnan != withnan)
+
+                # with missing and filter
+                # this is just a way to save the gender variable
+                - gender_backup: gender and gender
+                - assertEqual(avg(if(age > 10, -1, age), filter=gender),
+                              avg(age, filter=age <= 10 and gender))
+                - f_age: age * 1.0
+                - assertEqual(avg(if(age > 10, nan, f_age), filter=gender),
+                              avg(f_age, filter=age <= 10 and gender))
+                # check that gender was not modified (used to be the case)
+                - assertEqual(gender, gender_backup)
+                
+                # bool expr
+                - assertEqual(avg([False, True, True, False]), 0.5)
+                
+                # Old syntax
+                # ----------
+
+                - assertEqual(grpavg(age), sum(age) / count())
+                - assertEqual(grpavg(age, filter=MALE),
+                              sum(age, filter=MALE) / count(MALE))
+                - assertEqual(grpavg(age, filter=FEMALE),
+                              sum(age, filter=FEMALE) / count(FEMALE))
+                - assertEqual(grpavg([1, -1, 3], skip_na=False), 1.0)
+
+            test_std:
+                # bool expr
+                - assertEqual(std([False, True, True, False]), 0.5)
+
+                # Old syntax
+                # ----------
+
+                - assertEqual(grpstd([False, True, True, False]), 0.5)
+
+            test_min:
+                # simple scalars
+                - assertEqual(min([2, 1, 3]), 1)
+                - assertEqual(min([2.0, 1.0, 3.0]), 1.0)
+
+                # simple column
+                - assertEqual(min(age), 0)
+
+                # explicit filter
+                - assertEqual(min(age, filter=age >= 10), 10)
+
+                # with na
+                - assertEqual(min([3, -1, 2]), 2)
+                - assertEqual(min([3.0, nan, 2.0]), 2.0)
+
+                # with na not skipping
+                - assertEqual(min([3, -1, 2], skip_na=False), -1)
+                - whnan: min([3.0, nan, 2.0], skip_na=False)
+                - assertTrue(whnan != whnan)
+
+                # with na and filter
+                # this is just a way to save the gender variable
+                - gender_backup: gender and gender
+                - assertEqual(min(if(age > 10, -1, age), filter=gender),
+                              min(age, filter=age <= 10 and gender))
+                - f_age: age * 1.0
+                - assertEqual(min(if(age > 10, nan, f_age), filter=gender),
+                              min(f_age, filter=age <= 10 and gender))
+                # check that gender was not modified (used to be the case)
+                - assertEqual(gender, gender_backup)
+
+                # Old syntax
+                # ----------
+
+                - assertEqual(grpmin([2, 1, 3]), 1)
+                - assertEqual(grpmin([2.0, 1.0, 3.0]), 1.0)
+                - assertEqual(grpmin(age, filter=age >= 10), 10)
+                - assertEqual(grpmin([3, -1, 2], skip_na=False), -1)
+
+            test_max:
+                # simple scalars
+                - assertEqual(max([2, 1, 3]), 3)
+                - assertEqual(max([2.0, 1.0, 3.0]), 3.0)
+
+                # simple column
+                - assertTrue(all(age <= max(age)))
+
+                # explicit filter
+                - assertEqual(max(age, filter=age <= 20), 20)
+
+                # with na
+                - assertEqual(max([3, -1, 2]), 3)
+                - assertEqual(max([-3, -1, -2]), -2)
+                - assertEqual(max([3.0, nan, 2.0]), 3.0)
+
+                # with na not skipping
+                - assertEqual(max([3, -1, 2], skip_na=False), 3)
+                - assertEqual(max([-3, -1, -2], skip_na=False), -1)
+                - whnan: max([3.0, nan, 2.0], skip_na=False)
+                - assertTrue(whnan != whnan)
+
+                # with na and filter
+                # this is just a way to save the gender variable
+                - gender_backup: gender and gender
+                - assertEqual(max(if(age < 10, -1, age), filter=gender),
+                              max(age, filter=age >= 10 and gender))
+                - f_age: age * 1.0
+                - assertEqual(max(if(age < 10, nan, f_age), filter=gender),
+                              max(f_age, filter=age >= 10 and gender))
+                # check that gender was not modified (used to be the case)
+                - assertEqual(gender, gender_backup)
+
+                # Old syntax
+                # ----------
+
+                - assertEqual(grpmax([2, 1, 3]), 3)
+                - assertEqual(grpmax([2.0, 1.0, 3.0]), 3.0)
+                - assertEqual(grpmax(age, filter=age <= 20), 20)
+                - assertEqual(grpmax([-3, -1, -2]), -2)
+                - assertEqual(grpmax([-3, -1, -2], skip_na=False), -1)
+
+            test_median:
+                # simple without filter
+                - median_age: median(age)
+                - num_young: count(age < median_age)
+                - num_median: count(age == median_age)
+                - num_old: count(age > median_age)
+                - num_total: count()
+
+                - assertTrue(num_young <= num_total / 2)
+                - assertTrue(num_old <= num_total / 2)
+                - assertEqual(num_young + num_median + num_old, num_total)
+
+                # scalar (there is not much point but it should not crash)
+                - median_age2: median(median_age)
+                - assertEqual(median_age, median_age2)
+
+                # with an explicit filter
+                - median_age: median(age, filter=gender)
+                - num_young: count(gender and (age < median_age))
+                - num_median: count(gender and (age == median_age))
+                - num_old: count(gender and (age > median_age))
+                - num_total: count(gender)
+
+                - assertTrue(num_young <= num_total / 2)
+                - assertTrue(num_old <= num_total / 2)
+                - assertEqual(num_young + num_median + num_old, num_total)
+
+                # Old syntax
+                # ----------
+                
+                # simple without filter
+                - median_age: grpmedian(age)
+                - num_young: count(age < median_age)
+                - num_median: count(age == median_age)
+                - num_old: count(age > median_age)
+                - num_total: count()
+                - assertTrue(num_young <= num_total / 2)
+                - assertTrue(num_old <= num_total / 2)
+                - assertEqual(num_young + num_median + num_old, num_total)
+
+                # with an explicit filter
+                - median_age: grpmedian(age, filter=gender)
+                - num_young: count(gender and (age < median_age))
+                - num_median: count(gender and (age == median_age))
+                - num_old: count(gender and (age > median_age))
+                - num_total: count(gender)
+                - assertTrue(num_young <= num_total / 2)
+                - assertTrue(num_old <= num_total / 2)
+                - assertEqual(num_young + num_median + num_old, num_total)
+
+            test_percentile:
+                # without filter
+                - age_10p: percentile(age, 10)
+                - num_young: count(age < age_10p)
+                - num_10p: count(age == age_10p)
+                - num_old: count(age > age_10p)
+                - num_total: count()
+
+                # the + 1 are necessary in case the Nth value is between two
+                # different values because in that case, the percentile is a
+                # linear approximation of both values, and thus the number of
+                # values smaller can be 1 more. Note that if we are between
+                # two indices but the values at those two indices is the same
+                # we do not have a problem, that is why this problem only
+                # triggers rarely in our test because many individuals have
+                # the same age.
+                # >>> a = [0, 1, 2, 3, 4]
+                # >>> np.percentile(a, 25)
+                # 1.0
+                # >>> np.sum(a < 1.0)
+                # 1
+                # >>> np.percentile(a, 26)
+                # 1.04
+                # >>> np.sum(a < 1.04)
+                # 2 
+                - assertTrue(num_young <= (num_total / 10) + 1)
+                - assertTrue(num_old <= (num_total * 90 / 100) + 1)
+                - assertEqual(num_young + num_10p + num_old, num_total)
+
+                # with a filter
+                - age_10p: percentile(age, 10, filter=gender)
+                - num_young: count(gender and (age < age_10p))
+                - num_10p: count(gender and (age == age_10p))
+                - num_old: count(gender and (age > age_10p))
+                - num_total: count(gender)
+                - assertTrue(num_young <= (num_total / 10) + 1)
+                - assertTrue(num_old <= (num_total * 90 / 100) + 1)
+                - assertEqual(num_young + num_10p + num_old, num_total)
+
+                # Old syntax
+                # ----------
+                
+                # without filter
+                - age_10p: grppercentile(age, 10)
+                - num_young: count(age < age_10p)
+                - num_10p: count(age == age_10p)
+                - num_old: count(age > age_10p)
+                - num_total: count()
+                - assertTrue(num_young <= (num_total / 10) + 1)
+                - assertTrue(num_old <= (num_total * 90 / 100) + 1)
+                - assertEqual(num_young + num_10p + num_old, num_total)
+
+                # with a filter
+                - age_10p: grppercentile(age, 10, filter=gender)
+                - num_young: count(gender and (age < age_10p))
+                - num_10p: count(gender and (age == age_10p))
+                - num_old: count(gender and (age > age_10p))
+                - num_total: count(gender)
+                - assertTrue(num_young <= (num_total / 10) + 1)
+                - assertTrue(num_old <= (num_total * 90 / 100) + 1)
+                - assertEqual(num_young + num_10p + num_old, num_total)
+
+            test_gini:
+                # simple expr
+                - assertEqual(gini([1, 1, 1]), 0)
+                - assertEqual(gini([0, 0, 0, 1]), 0.75)
+                - assertEqual(gini([1.0, 0.0, 1.0, 1.0]), 0.25)
+                
+                # with missing values
+                - assertEqual(gini([0, -1, 1, 0, 0, -1]), 0.75)
+                - assertEqual(gini([0.0, nan, 1.0, 0.0, 0.0, nan]), 0.75)
+
+                # with missing values without skipping
+                - assertEqual(gini([0, -1, 1, 1, 0], skip_na=False), 2.0)
+                - wh_nan: gini([0.0, nan, 1.0, 0.0, nan], skip_na=False)
+                - assertTrue(wh_nan != wh_nan)
+
+                # boolean expr
+                - assertEqual(gini([False, False, False, True]), 0.75)
+
+                # with an explicit filter
+                - show('gini(age)', gini(age))
+                - show('gini(age) by sex:',
+                       gini(age, filter=MALE),
+                       '/',
+                       gini(age, filter=FEMALE))
+
+                # with missing and filter
+                # this is just a way to save the gender variable
+                - gender_backup: gender and gender
+                - assertEqual(gini(if(age > 10, -1, age), filter=gender),
+                              gini(age, filter=age <= 10 and gender))
+                - f_age: age * 1.0
+                - assertEqual(gini(if(age > 10, nan, f_age), filter=gender),
+                              gini(f_age, filter=age <= 10 and gender))
+                # check that gender was not modified (used to be the case)
+                - assertEqual(gender, gender_backup)
+
+                # Old syntax
+                # ----------
+
+                - assertEqual(grpgini([0, 0, 0, 1]), 0.75)
+                - assertEqual(grpgini([0, -1, 1, 1, 0], skip_na=False), 2.0)
+                - show('grpgini(age) by sex:',
+                       grpgini(age, filter=MALE),
+                       '/',
+                       grpgini(age, filter=FEMALE))
+                
+            test_choice:
+                - intchoice: choice([0, 5, 10], [0.1, 0.2, 0.7])
+                - num0: count(intchoice == 0)
+                - num5: count(intchoice == 5)
+                - num10: count(intchoice == 10)
+                - num_total: count()
+                - assertEqual(num0 + num5 + num10, num_total)
+
+                # test choices and probablities being expressions
+                - zero: avg(age) - avg(age)
+
+                - p0: zero + 0.1
+                - p1: zero + 0.3
+
+                - fchoice: choice([zero, zero + 1.0, zero + 2.0], [p0, p1, 1.0 - p0 - p1])
+
+                - num0: count(fchoice == 0.0)
+                - num1: count(fchoice == 1.0)
+                - num2: count(fchoice == 2.0)
+                - assertEqual(num0 + num1 + num2, num_total)
+                # this assertion can fail but it should occur pretty rarely
+                - assertTrue((num0 < num1) and (num1 < num2))
+                
+                - show(groupby(choice([zero, zero + 1.0], [p0, 1.0 - p0]),
+                               choice([0, 1], [0.3, 0.7]),
+                               choice([0, 1])))
+
+                # cases where choice should raise an exception
+#                - bad1: choice([0, 1, 2], [0.5, 0.2, 0.1]) # sum < 1 
+#                - bad2: choice([0, 1, 2], [0.5, 0.4, 0.3]) # sum > 1 
+
+                # cases where choice should print a warning
+                - warn1: choice([0, 1], [0.5, 0.499999])  # sum slightly < 1 
+                - warn2: choice([0, 1], [0.5, 0.5000009]) # sum slightly > 1 
+
+            test_groupby:
+                # 1 dim
+                - by_gender: groupby(gender)
+                - assertEqual(by_gender,
+                              [count(not gender), count(gender)])
+
+                # 2 dim
+                - by_agegroup_gender: groupby(agegroup, gender)
+                - assertEqual(by_agegroup_gender.ndim, 2)
+                - assertEqual(by_agegroup_gender.dim_names,
+                              ['agegroup', 'gender'])
+                - assertTrue(by_agegroup_gender.row_totals.__len__() > 0)
+                - assertEqual(by_agegroup_gender.col_totals,
+                              [count(not gender),
+                               count(gender),
+                               count()])
+                - assertEqual(by_agegroup_gender[0],
+                              [count(agegroup == -1 and not gender),
+                               count(agegroup == -1 and gender)])
+
+                # fails as expected, but if we can fix this, it would be nice
+#                - show('groupby scalar', groupby(True, gender))
+                # this is currently broken
+#                - show('groupby scalar', groupby(avg(age), gender))
+
+                # grouping by expressions (not only simple columns)
+                - show(groupby(round(logit_score(0.0), 1)))
+                - show('groupby global', groupby(if(gender, 65, WEMRA), gender))
+
+                # with expr=
+                - explicit_count: groupby(gender, expr=count())
+                - assertEqual(explicit_count,
+                              [count(not gender), count(gender)])
+
+                - avg_age: groupby(gender, expr=avg(age))
+                - assertEqual(avg_age, [avg(age, filter=not gender),
+                                        avg(age, filter=gender)])
+                
+                - show('min', groupby(agegroup, expr=min(age)))
+                - temp_scalar: avg(age)
+                - show('wh scalar variable', groupby(agegroup, expr=temp_scalar * min(age)))
+
+                # with expr= and filter
+                - avg_age_work: groupby(gender, expr=avg(age), filter=work)
+                - assertEqual(avg_age_work,
+                              [avg(age, filter=work and not gender),
+                               avg(age, filter=work and gender)])
+                - assertEqual(avg_age_work.row_totals,
+                              [avg(age, filter=work)])
+                # expr=id
+                - ids_by_gender: groupby(gender, expr=id, filter=id < 20)
+                - assertEqual(ids_by_gender[0], id[id < 20 and not gender])
+                - assertEqual(ids_by_gender[1], id[id < 20 and gender])
+
+                # expr=id with the same number in each category (because in
+                # that case dtype is int, instead of object) 
+                - ids_by_id: groupby(id >= 10, expr=id, filter=id < 20)
+                - assertEqual(ids_by_id[0], id[id < 10])
+                - assertEqual(ids_by_id[1], id[id >= 10 and id < 20])
+
+                # expr=scalar
+                - ten_by_gender: groupby(gender, expr=10)
+                - assertEqual(ten_by_gender, [10, 10])
+
+                # empty result
+                - empty: groupby(gender, filter=age > 200)
+                - show(empty)
+                - assertEqual(empty, [])
+                - empty_percent: groupby(gender, filter=age > 200,
+                                         percent=True)
+                - assertEqual(empty_percent, [])
+                - show(empty_percent)
+
+                # ...
+                - num_persons2_percent: show(groupby(agegroup, gender, percent=True))
+                
+                - num_persons_weight_percent: show(groupby(agegroup, gender, expr=sum(weight), percent=True))
+                - num_persons_csv: csv(groupby(agegroup, gender), suffix='groupby')
+                - num_persons3: show(groupby(agegroup, dead, gender))
+
+                - ismarried: partner_id != -1
+                - num_persons3t: show(groupby(agegroup, gender, ismarried))
+                - num_alive: show(groupby(agegroup, gender,
+                                          expr=count(not dead)))
+                - num_married: show(groupby(agegroup, gender,
+                                            expr=count(ismarried)))
+                - num_widows: show(groupby(agegroup, gender,
+                                           expr=count(partner.dead)))
+                - num_bad_partner: show(groupby(agegroup, gender,
+                                                expr=count((partner_id != -1) and (partner.partner.id != id))))
+                - agediff: show(groupby(agegroup, gender,
+                                        expr=avg(age - if(partner.age == -1, nan, partner.age))))
+#                                        expr=avg(abs(age - if(partner.age == -1, nan, partner.age)))))
+#                - minmax_age: show(groupby(id / 100, gender, expr=max(age) - min(age)))
+
+                # groupby in expressions
+                # ----------------------
+                - simple_expr: by_agegroup_gender * 2  
+                - assertEqual(simple_expr.ndim, 2)
+                - assertEqual(simple_expr.dim_names, ['agegroup', 'gender'])
+                - assertEqual(simple_expr.row_totals, None)
+                - assertEqual(simple_expr.col_totals, None)
+                
+                # We cannot use groupby(age, filter=gender) because in that
+                # case we might have missing age categories whereas we want
+                # them to be empty instead.  
+                - men_by_age: groupby(age, expr=count(gender))
+                - assertEqual(men_by_age.dim_names, ['age'])
+                - by_age: groupby(age)
+                - assertEqual(by_age.dim_names, ['age'])
+                - men_prop_by_age: men_by_age / by_age
+                - assertEqual(men_prop_by_age.dim_names, ['age'])
+                - assertEqual(men_prop_by_age,
+                              groupby(age, expr=count(gender) / count()))
+
+                # this does not trigger the same path than men_prop_by_age
+                # (even though both go through ne), but this one creates hidden
+                # temporary variables in EvaluableExpression.as_simple_expr
+                # while the other does not
+                - men_prop2: groupby(age, expr=count(gender)) / groupby(age)
+                - assertEqual(men_prop2.dim_names, ['age'])
+
+                - min_count_by_gender: min(by_agegroup_gender, axis=0)
+                - qshow(min_count_by_gender)
+                - assertEqual(min_count_by_gender.shape, (2,))
+                - assertEqual(min_count_by_gender.dim_names, None)
+                - assertEqual(min_count_by_gender.row_totals, None)
+                - assertEqual(min_count_by_gender.col_totals, None)
+
+                - min_count_by_agegroup: min(by_agegroup_gender, axis=1)  
+                - assertEqual(min_count_by_agegroup.shape, (16,))
+                - assertEqual(min_count_by_agegroup.dim_names, None)
+                - assertEqual(min_count_by_gender.row_totals, None)
+                - assertEqual(min_count_by_gender.col_totals, None)
+
+
+            show_weight: show("avg weight", avg(weight),
+                              "total population", sum(weight))
+
+            test_imported_process:
+                - qshow(imported_field1)
+                - assertEquiv(imported_field1, -1)
+                - assertEqual(imported_field2, age + 2)
+
+            generate: new('person', number=10000000,
+                          age=randint(0, 98),
+                          dead=False,
+                          gender=choice([False, True]),
+                          work=choice([False, True]),
+                          partner_id=-1,
+                          f_id=-1,
+                          m_id=-1,
+                          hh_id=-1)
+
+simulation:
+    init:
+        - household: [init_region]
+        - person: [
+#            generate,
+            test_init,
+            test_dump_init
+        ]
+#        - household: [setweight, check]
+#        # pass 1: weight up to 2
+#        - household: [expand]
+#        - person: [expand]
+#        # pass 2: weights up to 4
+#        - household: [expand]
+#        - person: [expand]
+#        # pass 3: weights up to 8
+#        - household: [expand]
+#        - person: [expand]
+#        # pass 4: weights up to 16
+#        - household: [expand]
+#        - person: [expand]
+#        # pass 5: weights up to 32
+#        - household: [expand]
+#        - person: [expand]
+#
+#        - household: [check]
+
+    processes:
+        - region: [dummy]
+        - person: [
+#                   bp,
+                   cleanup,
+
+                   # basic
+                   temp_global,
+                   show_temp_global,
+                   temp_global_test1,
+                   show_temp_global,
+                   temp_global_test2,
+                   show_temp_global,
+
+                   test_expr,
+
+                   test_logit,
+                   test_logistic,
+
+                   test_attr,
+                   test_subscript,
+                   test_call,
+
+                   test_periodic_globals,
+                   test_other_globals,
+                   test_globals_nd,
+
+                   test_macro,
+                   test_compound,
+                   agegroup,
+
+                   test_predictor1, test_predictor2, test_predictor3,
+
+#                   test_extra_comma,
+#                   test_uninitialized_var,
+
+                   # lifecycle
+                   test_new,
+                   test_clone,
+
+                   # aggregates 
+                   test_count,
+                   test_sum,
+                   test_avg,
+                   test_std,
+                   test_min,
+                   test_max,
+                   test_median,
+                   test_percentile,
+                   test_gini,
+
+                   # regressions
+                   test_logit_regr,
+                   test_cont_regr,
+                   test_log_regr,
+
+                   # temporal
+                   test_lag,
+                   test_value_for_period,
+                   test_duration,
+
+                   # links
+                   test_o2m,
+                   test_mixed_links,
+
+                   # output
+                   test_groupby,
+#                   test_dump,
+                   test_csv,
+                   
+                   imported_process,
+                   test_imported_process,
+                   
+                   # alignment
+                   test_align,
+                   test_align_abs,
+                   
+                   # misc
+                   test_choice,
+                   show_weight,
+                   [marriage, 4],
+        ]
+        - household: [num_persons, nch, maxnch, test_align_link
+#                      dump_csv_h,
+                     ]
+
+#    input:
+#        method: void
+#        file: none
+
+    output:
+        file: simulation.h5
+#    autodump: True
+#    autodiff: True
+
+    random_seed: 0
+    periods: 2
+#    skip_shows: True

@@ -1,0 +1,30 @@
+#################
+## Eclipse
+#################
+
+*.pydevproject
+.project
+.metadata
+bin/
+tmp/
+*.pyc
+
+Patrimoine/data*
+
+person20*
+person*.csv
+menage20*
+
+*.xlsx
+*.h5
+*.csv
+
+#Patrimoine/*
+Patrimoine/*.Rdata
+Patrimoine/ici_exp.Rdata
+test/small*
+output OF*
+Patrimoine/.Rhistory
+
+output/*.gzip
+doc/*
