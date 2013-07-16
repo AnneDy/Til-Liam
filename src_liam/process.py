@@ -75,10 +75,7 @@ class ExtProcess(Process):
 
     def run_guarded(self, simulation, const_dict):
         context = EntityContext(self.entity, const_dict.copy())
-        try:
-            self.run(simulation, context['period'])
-        except:
-            pass    
+        self.run(simulation, context['period'])  
             
     def run(self, simulation, period):
         module = importlib.import_module(self.name)
