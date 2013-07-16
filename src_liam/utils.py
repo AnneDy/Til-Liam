@@ -20,7 +20,7 @@ import numpy as np
 import config
 
 # [a,b]: a is number per year and b is the digit in the tens place to identify unit
-time_period = {'month':1, 'bimonth':2, 'quarter':3, 'triannual':4, 'semester':6, 'year':12}
+time_period = {'month':1, 'bimonth':2, 'quarter':3, 'triannual':4, 'semester':6, 'year':12, 'year0':1}
 
 class UserDeprecationWarning(UserWarning):
     pass

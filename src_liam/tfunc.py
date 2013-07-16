@@ -33,7 +33,12 @@ class Lag(FunctionExpression):
     def evaluate(self, context):
         entity = context['__entity__']
         idx = context['period_idx'] - expr_eval(self.num_periods, context)
-        period = context['periods'][idx]
+        # si idx est negatif on va chercher la periode a droite de periods, ce n'est pas ce qu'on veut.
+        if idx >= 0:
+            period = context['periods'][idx]
+        else:
+            period = 0
+        print(entity.value_for_period(self.expr, period, context,self.missing))
         return entity.value_for_period(self.expr, period, context,
                                        self.missing)
 
@@ -48,7 +53,8 @@ class Duration(FunctionExpression):
         entity = context['__entity__']
 
         baseperiod = entity.base_period
-        period = context['period'] - 1
+        lag_idx = context['period_idx'] - 1
+        period = context['periods'][lag_idx]
         bool_expr = self.expr
         value = expr_eval(bool_expr, context)
 
@@ -60,6 +66,8 @@ class Duration(FunctionExpression):
 
         id_to_rownum = context.id_to_rownum
         still_running = value.copy()
+        
+        print( 'Warning : duration works only with year0 so far')             
         while np.any(still_running) and period >= baseperiod:
             ids, values = entity.value_for_period(bool_expr, period, context,
                                                   fill=None)
@@ -76,6 +84,7 @@ class Duration(FunctionExpression):
             still_running &= period_value | missing
             last_period_true[period_value] = period
             period -= 1
+        
         return result
 
     def dtype(self, context):

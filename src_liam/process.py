@@ -75,7 +75,10 @@ class ExtProcess(Process):
 
     def run_guarded(self, simulation, const_dict):
         context = EntityContext(self.entity, const_dict.copy())
-        self.run(simulation, context['period'])
+        try:
+            self.run(simulation, context['period'])
+        except:
+            pass    
             
     def run(self, simulation, period):
         module = importlib.import_module(self.name)
@@ -151,27 +154,32 @@ class Assignment(Process):
         elif '.' in self.predictor:
             predictor_split = self.predictor.split('.')
 
+            #initialisation
             target_entity = self.entity
-            target_ids = self.entity.id_to_rownum[1:] 
             source_context = context
             #add index
             for link_name in predictor_split[:-1]:
                 link = target_entity.links[link_name]
                 if isinstance(link,Many2One): 
-                    target_entity = link._target_entity()                   
-                    ids = expr_eval( Variable(link._link_field) , source_context) -1
-                    source_context = link._target_context(context) 
-                    target_ids = ids[target_ids] 
+                    target_context = link._target_context(source_context)
+    
+                    ids = expr_eval( Variable(link._link_field) , source_context)
+                    target_ids = target_context.id_to_rownum    
+                    target_ids = target_ids[ids] 
                     
+                    source_context = target_context
+                    target_entity = link._target_entity()  
                 else: 
                     raise Exception("Only Many2One link "
-                                    " can be used. '%s' is One2Many" % target_entity)
-            target = target_entity.array
+                                    " can be used. '%s' is %s" % (target_entity, type(target_entity)))
+            target_array = target_entity.array
+            
             # on ne doit pas avoir de temp_variable, encore qu'on pourrait
             try: 
-                target[predictor_split[-1]][target_ids] = result
+                target_array[predictor_split[-1]][target_ids] = result
             except:
                 import pdb
+                print(predictor_split)
                 pdb.set_trace() 
 
     def expressions(self):

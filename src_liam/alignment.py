@@ -487,6 +487,9 @@ class AlignmentAbsoluteValues(FilteredExpression):
                                     unaligned)
 
         periodicity = context['periodicity']
+        if context['format_date'] == 'year0':
+            periodicity = periodicity*12 #give right periodicity/self.periodicity_given whereas self.periodicity_given/12 doesn't
+            
         #sign(self.periodicity_given) = sign(periodicity)
         self.periodicity_given = \
             self.periodicity_given * (self.periodicity_given*periodicity)/abs(self.periodicity_given*periodicity)

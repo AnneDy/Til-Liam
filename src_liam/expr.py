@@ -813,9 +813,10 @@ class GlobalVariable(Variable):
                 globals_periods = globals_table['PERIOD']
             except ValueError:
                 globals_periods = globals_table['period']
-            if max(globals_periods) < 9999:
-                globals_periods = [100* x +1 for x in globals_periods]         
-            row = np.searchsorted(globals_periods, key, side='right')
+            if context['format_date'] != 'year0':
+                if max(globals_periods) < 9999:
+                    globals_periods = [100* x +1 for x in globals_periods]         
+            row = np.searchsorted(globals_periods, key, side='left')
         else:
             row = key
         if self.name not in globals_table.dtype.fields:

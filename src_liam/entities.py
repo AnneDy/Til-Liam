@@ -432,6 +432,7 @@ class Entity(object):
         sub_context = EntityContext(self,
                                     {'periods': [period],
                                      'period_idx': 0,
+                                     'format_date': context['format_date'],
                                      '__globals__': context['__globals__']})
         result = expr_eval(expr, sub_context)
         if isinstance(result, np.ndarray) and result.shape:

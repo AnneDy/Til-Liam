@@ -418,7 +418,8 @@ class Simulation(object):
                 # build context for this period:
                 const_dict = {'period_idx': period_idx+1,
                               'periods': periods,
-                              'periodicity': time_period[self.time_scale]*(1 - 2*(self.retro)) , 
+                              'periodicity': time_period[self.time_scale]*(1 - 2*(self.retro)),
+                              'format_date': self.time_scale,
                               'nan': float('nan'),
                               '__globals__': globals_data}
                 assert(periods[period_idx+1] == period)
@@ -452,7 +453,7 @@ class Simulation(object):
                         #modify start if periodicity_simul is not month
                         start = int(start/periodicity_simul-0.01)*periodicity_simul + 1
                         
-                        if periodicity_process <= periodicity_simul or \
+                        if (periodicity_process <= periodicity_simul and self.time_scale != 'year0') or \
                                  month_idx % periodicity_process == start % periodicity_process:
                             const_dict['periodicity'] = periodicity_process*(1 - 2*(self.retro))
                             elapsed, _ = gettime(process.run_guarded, self,
@@ -493,8 +494,11 @@ class Simulation(object):
             month_periodicity = time_period[self.time_scale]
             time_direction = 1 - 2*(self.retro)
             time_step = month_periodicity*time_direction
+            
             periods = [ self.init_period + int(t/12)*100 + t%12   
                         for t in range(0, (self.periods+1)*time_step, time_step)]
+            if self.time_scale == 'year0':
+                periods = [ self.init_period + t for t in range(0, (self.periods+1))]
             print("simulated period are going to be: ",periods)
             
             init_start_time = time.time()
@@ -550,11 +554,11 @@ class Simulation(object):
                 process_time['Stat'] += elapsed              
 
             total_time = time.time() - main_start_time
-            nb_year_approx = periods[-1]/100 - periods[1]/100
-            if nb_year_approx > 0 : 
-                time_year = total_time/nb_year_approx
-            else:
-                time_year = 0
+            time_year = 0
+            if len(periods)>1:
+                nb_year_approx = periods[-1]/100 - periods[1]/100
+                if nb_year_approx > 0 : 
+                    time_year = total_time/nb_year_approx
                 
             print ("""
 ==========================================
