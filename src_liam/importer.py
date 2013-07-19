@@ -670,7 +670,8 @@ def load_def(localdir, ent_name, section_def, required_fields):
         return 'table', (target_fields, total_lines, iter(target), None)
 
 
-def file2h5(fpath, buffersize=10 * 2 ** 20):
+def file2h5(fpath, input_dir='',  
+                  buffersize=10 * 2 ** 20):
     with open(fpath) as f:
         content = yaml.load(f)
 
@@ -726,7 +727,7 @@ def file2h5(fpath, buffersize=10 * 2 ** 20):
             }
         }
     }
-
+                                    
     validate_dict(content, yaml_layout)
     localdir = os.path.dirname(os.path.abspath(fpath))
 
@@ -773,7 +774,7 @@ def file2h5(fpath, buffersize=10 * 2 ** 20):
         for ent_name, entity_def in content['entities'].iteritems():
             print()
             print(" %s" % ent_name)
-            input_filename = entity_def.get('path', ent_name + ".csv")
+            input_filename = entity_def.get('path', input_dir + ent_name + ".csv")
             if input_filename[-4:]=='.csv': 
                 kind, info = load_def(localdir, ent_name,
                                       entity_def, [('period', int), ('id', int)])
@@ -789,13 +790,18 @@ def file2h5(fpath, buffersize=10 * 2 ** 20):
                     csvfile.close()
                         
             if input_filename[-6:]=='.Rdata': 
+                
                 files_def = entity_def.get('files')
                 if files_def is None:
-                    files_def=ent_name               
+                    files_def = ent_name               
                 print(" - reading", input_filename, ",file", files_def)
                 rpy.set_default_mode(rpy.NO_CONVERSION)
                 msg, filters = compression_str2filter(compression)
-                rpy.r.load(input_filename)
+
+                try: 
+                    rpy.r.load(input_dir + input_filename)
+                except:
+                    rpy.r.load(input_filename)
                 print(" - storing %s..." % msg)
 
                 array_pandas = com.load_data(files_def)

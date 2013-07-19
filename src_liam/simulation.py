@@ -27,9 +27,6 @@ import expr
 
 import sys
 import pdb
-chemin = 'C:\\til\\'
-sys.path.append(chemin)
-sys.path.append(chemin+'src\\')
 
 
 def show_top_times(what, times):

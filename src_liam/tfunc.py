@@ -38,7 +38,6 @@ class Lag(FunctionExpression):
             period = context['periods'][idx]
         else:
             period = 0
-        print(entity.value_for_period(self.expr, period, context,self.missing))
         return entity.value_for_period(self.expr, period, context,
                                        self.missing)
 
